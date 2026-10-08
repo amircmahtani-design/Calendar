@@ -1,0 +1,72 @@
+rules_version = '2';
+
+// Amir Calendar — owner-only access.
+// Every document lives under users/{uid}. Only the signed-in owner, with the
+// one allowed Google account, can read or write. Integrations (Phase 3) never
+// touch Firestore directly; they go through Cloud Functions with the Admin SDK.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.email == 'amircmahtani@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function validCalendar() {
+      let d = request.resource.data;
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 100
+        && d.color is string && d.color.matches('^#[0-9A-Fa-f]{6}$')
+        && d.visible is bool && d.archived is bool;
+    }
+
+    function validEvent() {
+      let d = request.resource.data;
+      return d.calendarId is string
+        && d.title is string && d.title.size() <= 500
+        && d.allDay is bool
+        && d.start is string && d.end is string
+        && d.tz is string
+        && d.startUtc is number && d.endUtc is number
+        && d.endUtc >= d.startUtc
+        && (!('description' in d) || d.description == null || (d.description is string && d.description.size() <= 50000));
+    }
+
+    function validOverride() {
+      let d = request.resource.data;
+      return d.seriesId is string && d.recurrenceId is string && d.changes is map;
+    }
+
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /calendars/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validCalendar();
+      }
+      match /events/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validEvent();
+      }
+      match /overrides/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validOverride();
+      }
+      match /meta/{id} {
+        allow read, write: if isOwner(uid);
+      }
+      match /importBatches/{id} {
+        allow read, write: if isOwner(uid);
+        match /{rest=**} {
+          allow read, write: if isOwner(uid);
+        }
+      }
+    }
+
+    // Nothing else is readable or writable from clients.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
